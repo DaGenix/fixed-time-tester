@@ -49,14 +49,23 @@ fn go() {
 
     let mut a: [u8, ..4] = [0, 1, 2, 3];
     let mut b: [u8, ..4] = [0, 1, 2, 3];
+    let mut c: [u8, ..4] = [0, 3, 2, 3];
+
+    test::black_box(&a);
+    test::black_box(&b);
+    test::black_box(&c);
 
     println!("A[] = {:X}", &a as *const _ as uint);
     println!("B[] = {:X}", &b as *const _ as uint);
+    println!("C[] = {:X}", &c as *const _ as uint);
 
     testfun(&a, &b);
 
-    a = [0, 1, 2, 4];
+    b[2] = 9;
+    test::black_box(&b);
+
     testfun(&a, &b);
+    // testfun(&b, &c);
 }
 
 fn get_reg_value(regs: &sys::UserRegs, reg: distorm::RegisterType) -> u64 {
@@ -118,7 +127,7 @@ fn get_reg_value(regs: &sys::UserRegs, reg: distorm::RegisterType) -> u64 {
     }
 }
 
-fn print_inst(regs: &sys::UserRegs) {
+fn find_mem_access(regs: &sys::UserRegs, mem_access: &mut Vec<u64>) {
     use std::c_str::CString;
 
     let mut code_info: distorm::CodeInfo = Default::default();
@@ -166,6 +175,7 @@ fn print_inst(regs: &sys::UserRegs) {
                     0 => base_value,
                     _ => base_value + instruction.disp 
                 };
+                mem_access.push(mem_location);
                 println!("MEM ACCESS1: {:X}", mem_location);
             }
             distorm::OperandType::O_MEM => {
@@ -175,6 +185,7 @@ fn print_inst(regs: &sys::UserRegs) {
                     0 => base_value + index_value * (instruction.scale as u64),
                     _ => base_value + instruction.disp + index_value * (instruction.scale as u64)
                 };
+                mem_access.push(mem_location);
                 println!("MEM ACCESS2: {:X}", mem_location);
             }
             _ => { }
@@ -205,6 +216,8 @@ fn main() {
     let mut instruction_count: u32 = 0;
     let mut last_ip_list: Option<Vec<u64>> = None;
     let mut ip_list: Vec<u64> = Vec::new();
+    let mut last_mem_access_list: Option<Vec<u64>> = None;
+    let mut mem_access_list: Vec<u64> = Vec::new();
     loop {
         if unsafe { sys::waitpid(child_pid, &mut status as *mut libc::c_int, sys::__WALL) } != child_pid {
             panic!("waitpid failed");
@@ -230,7 +243,7 @@ fn main() {
                     panic!("Couldn't get child regs");
                 }
                 ip_list.push(user_regs.rip);
-                print_inst(&user_regs);
+                find_mem_access(&user_regs, &mut mem_access_list);
                 if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_SINGLESTEP, child_pid, 0, 0) } != 0 {
                     panic!("Couldn't single-step child");
                 }
@@ -248,9 +261,22 @@ fn main() {
                         println!("Run Completed with same instruction list");
                     }
                 }
+                if let Some(last_mem_access) = last_mem_access_list.take() {
+                    if last_mem_access != mem_access_list {
+                        println!("Memory accesses differ");
+                        if unsafe { sys::kill(child_pid, sys::Signals::SIGKILL) != 0 } {
+                            println!("Couldn't kill child");
+                        }
+                        return; 
+                    } else {
+                        println!("Run Completed with same memory access list");
+                    }
+                }
                 instruction_count = 0;
                 last_ip_list = Some(ip_list);
+                last_mem_access_list = Some(mem_access_list);
                 ip_list = Vec::new();
+                mem_access_list = Vec::new();
                 if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_CONT, child_pid, 0, 0) } != 0 {
                     panic!("Couldn't continue child");
                 }
