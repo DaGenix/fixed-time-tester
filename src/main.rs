@@ -49,17 +49,80 @@ fn go() {
 
     let mut a: [u8, ..4] = [0, 1, 2, 3];
     let mut b: [u8, ..4] = [0, 1, 2, 3];
+
+    println!("A[] = {:X}", &a as *const _ as uint);
+    println!("B[] = {:X}", &b as *const _ as uint);
+
     testfun(&a, &b);
 
     a = [0, 1, 2, 4];
     testfun(&a, &b);
 }
 
-fn print_inst(rip: uint) {
+fn get_reg_value(regs: &sys::UserRegs, reg: distorm::RegisterType) -> u64 {
+    match reg {
+        distorm::RegisterType::R_RAX => return regs.rax,
+        distorm::RegisterType::R_RCX => return regs.rcx,
+        distorm::RegisterType::R_RDX => return regs.rdx,
+        distorm::RegisterType::R_RBX => return regs.rbx,
+        distorm::RegisterType::R_RSP => return regs.rsp,
+        distorm::RegisterType::R_RBP => return regs.rbp,
+        distorm::RegisterType::R_RSI => return regs.rsi,
+        distorm::RegisterType::R_RDI => return regs.rdi,
+        distorm::RegisterType::R_R8 => return regs.r8,
+        distorm::RegisterType::R_R9=> return regs.r9,
+        distorm::RegisterType::R_R10 => return regs.r10,
+        distorm::RegisterType::R_R11 => return regs.r11,
+        distorm::RegisterType::R_R12 => return regs.r12,
+        distorm::RegisterType::R_R13 => return regs.r13,
+        distorm::RegisterType::R_R14 => return regs.r14,
+        distorm::RegisterType::R_R15 => return regs.r15,
+
+        distorm::RegisterType::R_EAX => return regs.rax & 0xffffffff,
+        distorm::RegisterType::R_ECX => return regs.rcx & 0xffffffff,
+        distorm::RegisterType::R_EDX => return regs.rdx & 0xffffffff,
+        distorm::RegisterType::R_EBX => return regs.rbx & 0xffffffff,
+        distorm::RegisterType::R_ESP => return regs.rsp & 0xffffffff,
+        distorm::RegisterType::R_EBP => return regs.rbp & 0xffffffff,
+        distorm::RegisterType::R_ESI => return regs.rsi & 0xffffffff,
+        distorm::RegisterType::R_EDI => return regs.rdi & 0xffffffff,
+        distorm::RegisterType::R_R8D => return regs.r8 & 0xffffffff,
+        distorm::RegisterType::R_R9D => return regs.r8 & 0xffffffff,
+        distorm::RegisterType::R_R10D => return regs.r10 & 0xffffffff,
+        distorm::RegisterType::R_R11D => return regs.r11 & 0xffffffff,
+        distorm::RegisterType::R_R12D => return regs.r12 & 0xffffffff,
+        distorm::RegisterType::R_R13D => return regs.r13 & 0xffffffff,
+        distorm::RegisterType::R_R14D => return regs.r14 & 0xffffffff,
+        distorm::RegisterType::R_R15D => return regs.r15 & 0xffffffff,
+
+        distorm::RegisterType::R_AX => return regs.rax & 0xffff,
+        distorm::RegisterType::R_CX => return regs.rcx & 0xffff,
+        distorm::RegisterType::R_DX => return regs.rdx & 0xffff,
+        distorm::RegisterType::R_BX => return regs.rbx & 0xffff,
+        distorm::RegisterType::R_SP => return regs.rsp & 0xffff,
+        distorm::RegisterType::R_BP => return regs.rbp & 0xffff,
+        distorm::RegisterType::R_SI => return regs.rsi & 0xffff,
+        distorm::RegisterType::R_DI => return regs.rdi & 0xffff,
+        distorm::RegisterType::R_R8W => return regs.r8 & 0xffff,
+        distorm::RegisterType::R_R9W => return regs.r9 & 0xffff,
+        distorm::RegisterType::R_R10W => return regs.r10 & 0xffff,
+        distorm::RegisterType::R_R11W => return regs.r11 & 0xffff,
+        distorm::RegisterType::R_R12W => return regs.r12 & 0xffff,
+        distorm::RegisterType::R_R13W => return regs.r13 & 0xffff,
+        distorm::RegisterType::R_R14W => return regs.r14 & 0xffff,
+        distorm::RegisterType::R_R15W => return regs.r15 & 0xffff,
+
+        distorm::RegisterType::R_RIP => return regs.rip,
+
+        _ => panic!("I don't recognize the register type")
+    }
+}
+
+fn print_inst(regs: &sys::UserRegs) {
     use std::c_str::CString;
 
     let mut code_info: distorm::CodeInfo = Default::default();
-    code_info.code = rip as *const u8;
+    code_info.code = regs.rip as *const u8;
     code_info.code_len = 15;
     code_info.decode_type = distorm::DecodeType::Decode64Bits;
 
@@ -92,7 +155,31 @@ fn print_inst(rip: uint) {
 
     let mnemonic = unsafe { CString::new(&format_info.mnemonic.p as *const i8, false) };
     let operands = unsafe { CString::new(&format_info.operands.p as *const i8, false) };
-    println!("{:x} {} {}", rip, mnemonic, operands);
+    println!("{:x} {} {}", regs.rip, mnemonic, operands);
+
+    for op in instruction.ops.iter() {
+        match op.typ {
+            distorm::OperandType::O_NONE => break,
+            distorm::OperandType::O_SMEM => {
+                let base_value = get_reg_value(regs, op.index);
+                let mem_location = match instruction.disp_size {
+                    0 => base_value,
+                    _ => base_value + instruction.disp 
+                };
+                println!("MEM ACCESS1: {:X}", mem_location);
+            }
+            distorm::OperandType::O_MEM => {
+                let index_value = get_reg_value(regs, op.index);
+                let base_value = get_reg_value(regs, instruction.base);
+                let mem_location = match instruction.disp_size {
+                    0 => base_value + index_value * (instruction.scale as u64),
+                    _ => base_value + instruction.disp + index_value * (instruction.scale as u64)
+                };
+                println!("MEM ACCESS2: {:X}", mem_location);
+            }
+            _ => { }
+        }
+    }
 }
 
 fn main() {
@@ -116,8 +203,8 @@ fn main() {
     }
 
     let mut instruction_count: u32 = 0;
-    let mut last_ip_list: Option<Vec<uint>> = None;
-    let mut ip_list: Vec<uint> = Vec::new();
+    let mut last_ip_list: Option<Vec<u64>> = None;
+    let mut ip_list: Vec<u64> = Vec::new();
     loop {
         if unsafe { sys::waitpid(child_pid, &mut status as *mut libc::c_int, sys::__WALL) } != child_pid {
             panic!("waitpid failed");
@@ -143,7 +230,7 @@ fn main() {
                     panic!("Couldn't get child regs");
                 }
                 ip_list.push(user_regs.rip);
-                print_inst(user_regs.rip);
+                print_inst(&user_regs);
                 if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_SINGLESTEP, child_pid, 0, 0) } != 0 {
                     panic!("Couldn't single-step child");
                 }
