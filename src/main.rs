@@ -5,6 +5,8 @@ extern crate libc;
 extern crate test;
 extern crate crypto;
 
+use crypto::digest::Digest;
+
 use std::any::Any;
 use std::cell::UnsafeCell;
 use std::mem;
@@ -40,7 +42,7 @@ fn testfun(a: &[u8], b: &[u8]) {
     signal_tracer_stop();
 }
 
-fn go() {
+fn go_old() {
     if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_TRACEME, 0, 0, 0) } != 0 {
         panic!("Failed to setup tracing");
     }
@@ -66,6 +68,127 @@ fn go() {
 
     testfun(&a, &b);
     // testfun(&b, &c);
+}
+
+#[inline(never)]
+fn testhash<T: Digest>(hasher: &mut T, data: &[u8]) {
+    signal_tracer_begin();
+    unsafe { asm!("nop") };
+    hasher.input(data);
+    let mut result = [0u8, ..32];
+    hasher.result(&mut result);
+    test::black_box(result.as_mut_slice());
+    unsafe { asm!("nop") };
+    signal_tracer_stop();
+}
+
+fn gohash() {
+    use crypto::digest::Digest;
+    use crypto::sha2::Sha256;
+
+    if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_TRACEME, 0, 0, 0) } != 0 {
+        panic!("Failed to setup tracing");
+    }
+    signal_tracer_stop();
+
+    let mut data: [u8, ..4] = [0, 1, 2, 3];
+    test::black_box(&mut data);
+
+    let mut hasher = Sha256::new();
+    test::black_box(&mut hasher);
+
+    testhash(&mut hasher, &data);
+
+    hasher.reset();
+
+    data = [4, 5, 6, 7];
+    test::black_box(&mut data);
+
+    testhash(&mut hasher, &data);
+}
+
+#[inline(never)]
+fn doaes(key: &[u8], data: &[u8]) {
+    use crypto::symmetriccipher::BlockEncryptor;
+    unsafe { asm!("nop") };
+    let cipher = crypto::aessafe::AesSafe128Encryptor::new(key.as_slice());
+    let mut result = [0u8, ..16];
+    cipher.encrypt_block(data.as_slice(), result.as_mut_slice());
+    test::black_box(result.as_mut_slice());
+    unsafe { asm!("nop") };
+}
+
+#[inline(never)]
+fn testaes(key: &[u8], data: &[u8]) {
+    signal_tracer_begin();
+    doaes(key, data);
+    signal_tracer_stop();
+}
+
+fn goaes() {
+    use std::rand::Rng;
+    use std::rand::StdRng;
+
+    if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_TRACEME, 0, 0, 0) } != 0 {
+        panic!("Failed to setup tracing");
+    }
+    signal_tracer_stop();
+
+    let mut key: [u8, ..16] = [0, ..16];
+    let mut data: [u8, ..16] = [0, ..16];
+
+    doaes(key.as_slice(), data.as_slice());
+
+    let mut rng = StdRng::new().ok().unwrap();
+
+    for _ in range(0u, 64) {
+        rng.fill_bytes(key.as_mut_slice());
+        rng.fill_bytes(data.as_mut_slice());
+        test::black_box(&mut key);
+        test::black_box(&mut data);
+        testaes(key.as_slice(), data.as_slice());
+    }
+}
+
+#[inline(never)]
+fn dorc4(key: &[u8], data: &[u8]) {
+    use crypto::symmetriccipher::SynchronousStreamCipher;
+    unsafe { asm!("nop") };
+    let mut cipher = crypto::rc4::Rc4::new(key);
+    let mut result = [0u8, ..16];
+    cipher.process(data.as_slice(), result.as_mut_slice());
+    test::black_box(result.as_mut_slice());
+    unsafe { asm!("nop") };
+}
+
+#[inline(never)]
+fn testrc4(key: &[u8], data: &[u8]) {
+    signal_tracer_begin();
+    dorc4(key, data);
+    signal_tracer_stop();
+}
+
+fn gorc4() {
+    if unsafe { sys::ptrace(sys::PTraceRequest::PTRACE_TRACEME, 0, 0, 0) } != 0 {
+        panic!("Failed to setup tracing");
+    }
+    signal_tracer_stop();
+
+    let mut key: [u8, ..16] = [0, ..16];
+    let mut data: [u8, ..16] = [0, ..16];
+    test::black_box(&mut key);
+    test::black_box(&mut data);
+
+    dorc4(key.as_slice(), data.as_slice());
+
+    testrc4(key.as_slice(), data.as_slice());
+    testrc4(key.as_slice(), data.as_slice());
+
+    key[4] = 4;
+    data[4] = 5;
+    test::black_box(&mut key);
+    test::black_box(&mut data);
+    testrc4(key.as_slice(), data.as_slice());
 }
 
 fn get_reg_value(regs: &sys::UserRegs, reg: distorm::RegisterType) -> u64 {
@@ -123,7 +246,10 @@ fn get_reg_value(regs: &sys::UserRegs, reg: distorm::RegisterType) -> u64 {
 
         distorm::RegisterType::R_RIP => return regs.rip,
 
-        _ => panic!("I don't recognize the register type")
+        _ => {
+            println!("Reg type: {}", reg as u8);
+            panic!("I don't recognize the register type")
+        }
     }
 }
 
@@ -162,9 +288,9 @@ fn find_mem_access(regs: &sys::UserRegs, mem_access: &mut Vec<u64>) {
                 &mut format_info as *mut distorm::DecodedInst);
     };
 
-    let mnemonic = unsafe { CString::new(&format_info.mnemonic.p as *const i8, false) };
-    let operands = unsafe { CString::new(&format_info.operands.p as *const i8, false) };
-    println!("{:x} {} {}", regs.rip, mnemonic, operands);
+    // let mnemonic = unsafe { CString::new(&format_info.mnemonic.p as *const i8, false) };
+    // let operands = unsafe { CString::new(&format_info.operands.p as *const i8, false) };
+    // println!("{:x} {} {}", regs.rip, mnemonic, operands);
 
     for op in instruction.ops.iter() {
         match op.typ {
@@ -176,17 +302,20 @@ fn find_mem_access(regs: &sys::UserRegs, mem_access: &mut Vec<u64>) {
                     _ => base_value + instruction.disp 
                 };
                 mem_access.push(mem_location);
-                println!("MEM ACCESS1: {:X}", mem_location);
+                // println!("MEM ACCESS1: {:X}", mem_location);
             }
             distorm::OperandType::O_MEM => {
                 let index_value = get_reg_value(regs, op.index);
-                let base_value = get_reg_value(regs, instruction.base);
+                let base_value = match instruction.base {
+                    distorm::RegisterType::R_NONE => 0,
+                    _ => get_reg_value(regs, instruction.base)
+                };
                 let mem_location = match instruction.disp_size {
                     0 => base_value + index_value * (instruction.scale as u64),
                     _ => base_value + instruction.disp + index_value * (instruction.scale as u64)
                 };
                 mem_access.push(mem_location);
-                println!("MEM ACCESS2: {:X}", mem_location);
+                // println!("MEM ACCESS2: {:X}", mem_location);
             }
             _ => { }
         }
@@ -196,7 +325,7 @@ fn find_mem_access(regs: &sys::UserRegs, mem_access: &mut Vec<u64>) {
 fn main() {
     let child_pid = unsafe { sys::fork() };
     if child_pid == 0 {
-        go();
+        goaes();
         return;
     }
 
