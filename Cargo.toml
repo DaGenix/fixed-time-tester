@@ -1,0 +1,8 @@
+[package]
+
+name = "rust-fixed-time-tester"
+version = "0.0.1"
+authors = ["Palmer Cox <p@lmercox.com>"]
+
+[dependencies]
+rust-crypto = "*"
