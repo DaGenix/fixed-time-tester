@@ -292,6 +292,8 @@ fn find_mem_access(regs: &sys::UserRegs, mem_access: &mut Vec<u64>) {
     // let operands = unsafe { CString::new(&format_info.operands.p as *const i8, false) };
     // println!("{:x} {} {}", regs.rip, mnemonic, operands);
 
+    // TODO - Check segment registers?
+
     for op in instruction.ops.iter() {
         match op.typ {
             distorm::OperandType::O_NONE => break,
